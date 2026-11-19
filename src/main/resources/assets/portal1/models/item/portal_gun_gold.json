@@ -1,6 +1,6 @@
 {
-  "parent": "minecraft:item/handheld",
+  "parent": "portal1:item/portal_gun_base",
   "textures": {
-    "layer0": "portal1:item/portal_gun_gold"
+    "core": "portal1:item/portal_gun_core_gold"
   }
 }

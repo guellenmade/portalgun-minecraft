@@ -1,25 +1,28 @@
+# Portal 1 Gun — Minecraft 26.2 NeoForge Mod
 
-Installation information
-=======
+A faithful recreation of the **Portal 1 (Valve)** Aperture Science Handheld Portal Device for **Minecraft 26.2 (NeoForge)**, featuring a custom Blender-modeled 3D Portal Gun, 4 color-coded independent portal pairs, lightweight unloaded-chunk portal persistence, smooth Immersive-Portals-inspired transitions, Sodium compatibility, and multiplayer support.
 
-This template repository can be directly cloned to get you started with a new
-mod. Simply create a new repository cloned from this one, by following the
-instructions provided by [GitHub](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
+## Features
+- **3D Blender-Modeled Portal Gun** (first-person, third-person, and 3D GUI preview) with 4 color-coded Portal Guns:
+  - **Portal Gun (Blue / Orange)** (`portal1:portal_gun`)
+  - **Portal Gun (Emerald / Magenta)** (`portal1:portal_gun_emerald`)
+  - **Portal Gun (Gold / Violet)** (`portal1:portal_gun_gold`)
+  - **Portal Gun (Cyan / Crimson)** (`portal1:portal_gun_crimson`)
+- **Visible Traveling Portal Projectiles** that open oval see-through portals on any full solid surface (rejecting glass, slime/honey blocks, crafting tables, and interactive/block-entity blocks).
+- **Momentum Preservation & Smooth Exits** ("speedy thing goes in, speedy thing comes out") with true per-tick player velocity tracking, floor-portal funneling, and zero-jitter camera rotation sync.
+- **Lightweight Unloaded-Chunk Persistence**: Distant portals stay linked and teleportable at any distance without force-loading chunks or ticking farms/machines.
+- **Weighted Storage Cubes** with Portal 1 carry behavior (`R` key, rebindable, no Gravity Gun punt).
+- **Multiplayer Isolation**: Each player's portal pairs are independent; any player can traverse any portal into its owner's linked partner portal.
+- **Sodium Compatible**: Uses standard `DynamicTexture` + `SubmitNodeCollector` rendering with zero hooks into chunk rendering internals.
 
-Once you have your clone, simply open the repository in the IDE of your choice. The usual recommendation for an IDE is either IntelliJ IDEA or Eclipse.
+## Requirements & Build
+- **Minecraft**: `26.2`
+- **NeoForge**: `26.2.0.95`
+- **JDK**: Java 25+ (`--release 25`)
+- **Gradle**: Included wrapper (`./gradlew` / `.\gradlew.bat`, Gradle `9.8.2`)
 
-If at any point you are missing libraries in your IDE, or you've run into problems you can
-run `gradlew --refresh-dependencies` to refresh the local cache. `gradlew clean` to reset everything 
-{this does not affect your code} and then start the process again.
+```bash
+./gradlew build
+```
 
-Mapping Names:
-============
-By default, the MDK is configured to use the official mapping names from Mojang for methods and fields 
-in the Minecraft codebase. These names are covered by a specific license. All modders should be aware of this
-license. For the latest license text, refer to the mapping file itself, or the reference copy here:
-https://github.com/NeoForged/NeoForm/blob/main/Mojang.md
-
-Additional Resources: 
-==========
-Community Documentation: https://docs.neoforged.net/  
-NeoForged Discord: https://discord.neoforged.net/
+The compiled mod JAR is output to `build/libs/portal1-neoforge-1.3.0+26.2.jar`.
