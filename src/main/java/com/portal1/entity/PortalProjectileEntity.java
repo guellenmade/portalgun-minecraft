@@ -9,17 +9,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.TicketType;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.ValueInput;
@@ -40,6 +43,7 @@ import net.minecraft.world.phys.Vec3;
 public final class PortalProjectileEntity extends Entity {
 
     public static final double SHOT_SPEED = 3.2; // blocks/tick (64 blocks/sec, brisk and clearly visible)
+    public static final double MAX_RANGE = 200.0; // max trickshot chunk-loading distance in blocks
     public static final int MAX_LIFETIME_TICKS = 100;
 
     private static final EntityDataAccessor<Integer> DATA_COLOR_RGB =
@@ -50,6 +54,8 @@ public final class PortalProjectileEntity extends Entity {
     private UUID ownerUuid;
     private float shooterYaw;
     private int channel;
+    private double distanceTraveled = 0.0;
+    private ChunkPos lastTicketChunk;
 
     public PortalProjectileEntity(EntityType<? extends PortalProjectileEntity> type, Level level) {
         super(type, level);
@@ -123,9 +129,20 @@ public final class PortalProjectileEntity extends Entity {
         }
 
         ServerLevel serverLevel = (ServerLevel) this.level();
-        if (this.tickCount > MAX_LIFETIME_TICKS) {
+        if (this.tickCount > MAX_LIFETIME_TICKS || this.distanceTraveled >= MAX_RANGE) {
             this.discard();
             return;
+        }
+
+        // Temporarily load the chunk ahead of the flying portal shot (expiring ENDER_PEARL ticket,
+        // capped at MAX_RANGE = 200 blocks) so long-range trickshots work across unloaded chunks
+        // without leaving chunks permanently force-loaded.
+        BlockPos nextBlock = BlockPos.containing(nextPos);
+        ChunkPos nextChunk = new ChunkPos(nextBlock.getX() >> 4, nextBlock.getZ() >> 4);
+        if (!nextChunk.equals(this.lastTicketChunk)) {
+            serverLevel.getChunkSource().addTicketWithRadius(TicketType.ENDER_PEARL, nextChunk, 2);
+            serverLevel.getChunk(nextChunk.x(), nextChunk.z());
+            this.lastTicketChunk = nextChunk;
         }
 
         // Server-side particle stream for all observers
@@ -143,6 +160,7 @@ public final class PortalProjectileEntity extends Entity {
             return;
         }
 
+        this.distanceTraveled += vel.length();
         this.setPos(nextPos);
     }
 
@@ -251,6 +269,7 @@ public final class PortalProjectileEntity extends Entity {
         });
         this.shooterYaw = input.getFloatOr("ShooterYaw", 0.0f);
         this.channel = input.getIntOr("Channel", 0);
+        this.distanceTraveled = input.getDoubleOr("DistanceTraveled", 0.0);
         this.entityData.set(DATA_IS_SECONDARY, input.getBooleanOr("IsSecondary", false));
         this.entityData.set(DATA_COLOR_RGB, input.getIntOr("ColorRgb", PortalColorScheme.CLASSIC.primaryRgb()));
     }
@@ -262,6 +281,7 @@ public final class PortalProjectileEntity extends Entity {
         }
         output.putFloat("ShooterYaw", this.shooterYaw);
         output.putInt("Channel", this.channel);
+        output.putDouble("DistanceTraveled", this.distanceTraveled);
         output.putBoolean("IsSecondary", isSecondary());
         output.putInt("ColorRgb", getColorRgb());
     }
