@@ -84,7 +84,9 @@ public final class PortalNetworking {
             context.enqueueWork(() -> {
                 var player = context.player();
                 if (player != null) {
-                    player.setDeltaMovement(payload.vx(), payload.vy(), payload.vz());
+                    var exitVel = new net.minecraft.world.phys.Vec3(payload.vx(), payload.vy(), payload.vz());
+                    player.setDeltaMovement(exitVel);
+                    com.portal1.client.Portal1ModClient.setPendingExitVelocity(exitVel);
                     player.setYRot(payload.yaw());
                     player.setXRot(payload.pitch());
                     player.yRotO = payload.yaw();

@@ -30,6 +30,13 @@ public final class Portal1ModClient {
         KeyMapping.Category.register(Portal1Mod.id("controls"));
 
     private static KeyMapping useObjectKey;
+    private static net.minecraft.world.phys.Vec3 pendingExitVelocity = null;
+    private static int pendingExitVelocityTicks = 0;
+
+    public static void setPendingExitVelocity(net.minecraft.world.phys.Vec3 vel) {
+        pendingExitVelocity = vel;
+        pendingExitVelocityTicks = 2;
+    }
 
     public Portal1ModClient(IEventBus modEventBus) {
         modEventBus.addListener(this::registerEntityRenderers);
@@ -70,6 +77,15 @@ public final class Portal1ModClient {
 
     private void onClientTick(ClientTickEvent.Post event) {
         Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null && pendingExitVelocity != null && pendingExitVelocityTicks > 0) {
+            if (mc.player.getDeltaMovement().lengthSqr() < pendingExitVelocity.lengthSqr() * 0.5) {
+                mc.player.setDeltaMovement(pendingExitVelocity);
+            }
+            pendingExitVelocityTicks--;
+            if (pendingExitVelocityTicks <= 0) {
+                pendingExitVelocity = null;
+            }
+        }
         if (useObjectKey != null) {
             while (useObjectKey.consumeClick()) {
                 if (mc.player != null) {

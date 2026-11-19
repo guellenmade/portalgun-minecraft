@@ -17,13 +17,13 @@ public final class PortalTransform {
      * Minimum upward exit speed (blocks/tick) when emerging upward out of a floor portal,
      * matching Portal 1's slight floor-exit boost so entities cleanly clear the portal lip.
      */
-    public static final double MIN_FLOOR_EXIT_SPEED = 0.42;
+    public static final double MIN_FLOOR_EXIT_SPEED = 0.44;
 
     /**
-     * Minimum horizontal exit speed (blocks/tick) when emerging from a wall portal so walking
+     * Minimum forward exit speed (blocks/tick) when emerging from a wall portal so walking
      * slowly into a portal still pushes the entity cleanly out the exit side.
      */
-    public static final double MIN_WALL_EXIT_SPEED = 0.12;
+    public static final double MIN_WALL_EXIT_SPEED = 0.22;
 
     private PortalTransform() {}
 
@@ -42,9 +42,8 @@ public final class PortalTransform {
     }
 
     /**
-     * Transforms an entity's world position from entry portal to exit portal, adding a safe
-     * forward clearance offset along the exit portal's normal so the entity does not clip into
-     * the exit wall or immediately re-trigger the exit portal.
+     * Transforms an entity's world position from entry portal to exit portal with safe clearance
+     * so the entity's hitbox never clips into surrounding wall/floor/ceiling blocks on exit.
      */
     public static Vec3 transformPosition(
         Vec3 entityPos,
@@ -55,11 +54,20 @@ public final class PortalTransform {
         double exitForwardOffset
     ) {
         Vec3 rel = entityPos.subtract(entryCenter);
-        // Preserve lateral offset within the oval (clamped inside the aperture so we never clip into side walls)
-        double localR = Mth.clamp(rel.dot(entry.right()), -PortalBasis.HALF_WIDTH * 0.45, PortalBasis.HALF_WIDTH * 0.45);
-        double localU = Mth.clamp(rel.dot(entry.up()), -PortalBasis.HALF_HEIGHT * 0.45, PortalBasis.HALF_HEIGHT * 0.45);
 
-        // Rotate 180 deg around U_A: R flips sign, U stays same, forward becomes exitForwardOffset
+        // Keep exit tightly centered inside the oval aperture to prevent snagging on adjacent solid blocks
+        double maxR = 0.18;
+        double maxU = exit.isWall() ? 0.15 : 0.18;
+        double localR = Mth.clamp(rel.dot(entry.right()), -maxR, maxR);
+        double localU = Mth.clamp(rel.dot(entry.up()), -maxU, maxU);
+
+        // When transitioning between horizontal (floor/ceiling) and vertical (wall) portals,
+        // center cleanly on the exit aperture so horizontal offset doesn't push feet into the floor.
+        if (entry.isWall() != exit.isWall()) {
+            localR = 0.0;
+            localU = 0.0;
+        }
+
         return exitCenter
             .add(exit.right().scale(-localR))
             .add(exit.up().scale(localU))
@@ -68,7 +76,40 @@ public final class PortalTransform {
 
     /**
      * Applies Portal 1 exit velocity rules after rigid momentum transformation.
-     * Full momentum is always preserved; only near-zero exit speeds receive a small clearance push.
+     * Full momentum is always preserved; only near-zero exit speeds receive a clean clearance push,
+     * and tiny lateral noise when flinging from floor-to-wall is damped so exits fly straight.
+     */
+    public static Vec3 applyExitVelocityRules(Vec3 transformedVel, PortalBasis entry, PortalBasis exit) {
+        Vec3 v = transformedVel;
+
+        // When entering a floor/ceiling portal and exiting a wall portal, damp tiny horizontal approach drift
+        // that mapped onto the wall's sideways (right) axis so jumping straight into a floor portal flings cleanly straight!
+        if (!entry.isWall() && exit.isWall()) {
+            double compF = v.dot(exit.forward());
+            double compU = v.dot(exit.up());
+            double compR = v.dot(exit.right());
+            if (Math.abs(compR) < 0.25) {
+                compR *= 0.15;
+            }
+            // Give a slight natural upward lift if exiting horizontally with no upward velocity, matching Portal 1 fling feel
+            if (compF > 0.35 && compU < 0.08 && compU > -0.25) {
+                compU = Math.max(compU, 0.10);
+            }
+            v = exit.forward().scale(compF).add(exit.up().scale(compU)).add(exit.right().scale(compR));
+        }
+
+        double forwardSpeed = v.dot(exit.forward());
+        if (exit.isFloor() && forwardSpeed < MIN_FLOOR_EXIT_SPEED) {
+            return v.add(exit.forward().scale(MIN_FLOOR_EXIT_SPEED - forwardSpeed));
+        }
+        if (exit.isWall() && forwardSpeed < MIN_WALL_EXIT_SPEED) {
+            return v.add(exit.forward().scale(MIN_WALL_EXIT_SPEED - forwardSpeed));
+        }
+        return v;
+    }
+
+    /**
+     * Legacy overload preserved for existing unit tests.
      */
     public static Vec3 applyExitVelocityRules(Vec3 transformedVel, PortalBasis exit) {
         double forwardSpeed = transformedVel.dot(exit.forward());

@@ -81,6 +81,8 @@ public final class PortalEntity extends Entity {
     private static final Map<UUID, Vec3> RECENT_VELOCITY = new HashMap<>();
     private static final Map<UUID, Long> RECENT_VELOCITY_TICK = new HashMap<>();
     private static final Map<UUID, Vec3> LAST_SAMPLE_POS = new HashMap<>();
+    private static final Map<UUID, Vec3> LAST_ENTITY_POS = new HashMap<>();
+    private static final Map<UUID, Long> LAST_ENTITY_POS_TICK = new HashMap<>();
     private static final long COOLDOWN_TICKS = 6L;
     public static final int OPEN_ANIMATION_TICKS = 6;
 
@@ -278,19 +280,41 @@ public final class PortalEntity extends Entity {
             if (isOnCooldown(entity.getUUID(), now)) {
                 continue;
             }
-            // Record pre-impact velocity while entity is moving rapidly toward the portal
-            Vec3 curVel = entity.getDeltaMovement();
-            if (curVel.lengthSqr() > 0.04) {
-                RECENT_VELOCITY.put(entity.getUUID(), curVel);
+            // Compute TRUE per-tick velocity from position delta (essential for ServerPlayer,
+            // whose server-side deltaMovement is stale because player movement is client-authoritative!)
+            Vec3 trueVel = computeTrueVelocity(entity, now);
+            if (trueVel.lengthSqr() > 0.01) {
+                RECENT_VELOCITY.put(entity.getUUID(), trueVel);
                 RECENT_VELOCITY_TICK.put(entity.getUUID(), now);
             }
             if (entryBasis.isFloor()) {
                 applyFloorFunneling(entity, entryBasis);
             }
-            if (shouldTeleport(entity, entryBasis)) {
-                teleportEntity(serverLevel, entity, entryBasis, partnerEndpoint, now);
+            if (shouldTeleport(entity, entryBasis, trueVel)) {
+                teleportEntity(serverLevel, entity, entryBasis, partnerEndpoint, trueVel, now);
             }
         }
+    }
+
+    private static Vec3 computeTrueVelocity(Entity entity, long now) {
+        Vec3 curPos = entity.position();
+        Vec3 prevPos = LAST_ENTITY_POS.put(entity.getUUID(), curPos);
+        Long prevTick = LAST_ENTITY_POS_TICK.put(entity.getUUID(), now);
+        Vec3 deltaVel = entity.getDeltaMovement();
+
+        if (prevPos != null && prevTick != null && now > prevTick && (now - prevTick) <= 3L) {
+            Vec3 posDelta = curPos.subtract(prevPos).scale(1.0 / (now - prevTick));
+            // Ignore huge jumps (teleports)
+            if (posDelta.lengthSqr() < 25.0) {
+                if (entity instanceof ServerPlayer) {
+                    return posDelta;
+                }
+                if (posDelta.lengthSqr() > deltaVel.lengthSqr()) {
+                    return posDelta;
+                }
+            }
+        }
+        return deltaVel;
     }
 
     private boolean isRegisteredInWorldData(PortalWorldData data) {
@@ -403,9 +427,8 @@ public final class PortalEntity extends Entity {
         return entity.position().add(0.0, entity.getBbHeight() * 0.5, 0.0);
     }
 
-    private boolean shouldTeleport(Entity entity, PortalBasis basis) {
+    private boolean shouldTeleport(Entity entity, PortalBasis basis, Vec3 vel) {
         Vec3 samplePoint = getEntitySamplePoint(entity, basis);
-        Vec3 vel = entity.getDeltaMovement();
         Vec3 local = basis.toLocal(samplePoint.subtract(this.position()));
 
         // Immersive-Portals-style exact plane-crossing check using previous tick position -> current position
@@ -461,11 +484,12 @@ public final class PortalEntity extends Entity {
         Entity entity,
         PortalBasis entryBasis,
         PlayerPortalRegistry.PortalEndpoint exitEndpoint,
+        Vec3 trueVel,
         long now
     ) {
         PortalBasis exitBasis = exitEndpoint.basis();
         Vec3 exitPos = exitEndpoint.position();
-        Vec3 inVel = entity.getDeltaMovement();
+        Vec3 inVel = trueVel;
 
         // If Minecraft's block collision just zeroed the entity's velocity on the exact impact frame
         // before PortalEntity.tick() ran, recover the pre-impact velocity from the last 2 ticks.
@@ -474,23 +498,29 @@ public final class PortalEntity extends Entity {
         if (recent != null && velTick != null && (now - velTick) <= 2L) {
             double curInto = -inVel.dot(entryBasis.forward());
             double recentInto = -recent.dot(entryBasis.forward());
-            if (recentInto > curInto + 0.15) {
+            if (recentInto > curInto + 0.12) {
                 inVel = recent;
             }
         }
 
+        // Suppress Minecraft's resting ground-gravity constant (-0.0784) on wall-to-wall portals
+        // so walking straight through a wall portal doesn't apply spurious downward drift.
+        if (entryBasis.isWall() && exitBasis.isWall() && Math.abs(inVel.y) < 0.10) {
+            inVel = new Vec3(inVel.x, 0.0, inVel.z);
+        }
+
         // 1. Exact Portal 1 momentum transformation
         Vec3 transformedVel = PortalTransform.transformVector(inVel, entryBasis, exitBasis);
-        Vec3 finalVel = PortalTransform.applyExitVelocityRules(transformedVel, exitBasis);
+        Vec3 finalVel = PortalTransform.applyExitVelocityRules(transformedVel, entryBasis, exitBasis);
 
-        // 2. Exit clearance based on exit surface orientation
+        // 2. Exit clearance based on exit surface orientation (ensuring feet/head never clip surrounding blocks)
         double exitOffset;
         if (exitBasis.isCeiling()) {
             exitOffset = entity.getBbHeight() + 0.30;
         } else if (exitBasis.isFloor()) {
-            exitOffset = 0.35;
+            exitOffset = 0.25;
         } else {
-            exitOffset = Math.max(0.72, entity.getBbWidth() * 0.6 + 0.40);
+            exitOffset = Math.max(0.78, entity.getBbWidth() * 0.65 + 0.45);
         }
 
         Vec3 sampleIn = entryBasis.isFloor()
@@ -499,20 +529,28 @@ public final class PortalEntity extends Entity {
         Vec3 targetCenter = PortalTransform.transformPosition(
             sampleIn, this.position(), entryBasis, exitPos, exitBasis, exitOffset
         );
-        Vec3 targetFeetPos = exitBasis.isWall()
-            ? targetCenter.subtract(0.0, entity.getBbHeight() * 0.5, 0.0)
-            : exitBasis.isCeiling()
-                ? targetCenter.subtract(0.0, entity.getBbHeight(), 0.0)
-                : targetCenter;
+        Vec3 targetFeetPos;
+        if (exitBasis.isWall()) {
+            // Keep feet cleanly at or above the bottom of the wall portal aperture so we never clip into the floor
+            double minFeetY = exitPos.y - PortalBasis.HALF_HEIGHT + 0.05;
+            double desiredFeetY = Math.max(minFeetY, targetCenter.y - entity.getBbHeight() * 0.5);
+            targetFeetPos = new Vec3(targetCenter.x, desiredFeetY, targetCenter.z);
+        } else if (exitBasis.isCeiling()) {
+            targetFeetPos = targetCenter.subtract(0.0, entity.getBbHeight(), 0.0);
+        } else {
+            targetFeetPos = targetCenter;
+        }
 
         // 3. Transform look angles (yaw & pitch)
         PortalTransform.YawPitch newLook = PortalTransform.transformYawPitch(
             entity.getYRot(), entity.getXRot(), entryBasis, exitBasis
         );
 
-        // 4. Mark cooldown and clear stale plane-crossing history before teleporting
+        // 4. Mark cooldown and clear stale plane-crossing/velocity history before teleporting
         TELEPORT_COOLDOWN_UNTIL.put(entity.getUUID(), now + COOLDOWN_TICKS);
         LAST_SAMPLE_POS.remove(entity.getUUID());
+        LAST_ENTITY_POS.remove(entity.getUUID());
+        LAST_ENTITY_POS_TICK.remove(entity.getUUID());
 
         // 5. Perform teleportation + velocity application (loads ONLY destination chunk on demand,
         //    never permanently force-loading chunks or ticking distant machines)
