@@ -18,17 +18,36 @@ import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
 
 /**
- * Persistent server-side storage for per-player portal pairs and color assignments.
- * Singleplayer naturally assigns color index 0 (classic Portal 1 Blue/Orange).
- * Multiplayer assigns each player their own independent pair and unique color scheme.
+ * Persistent server-side storage for per-player, per-channel portal pairs and lightweight
+ * PortalEndpoints. Storing endpoints here keeps distant portals linked and teleportable even
+ * when the partner portal's chunk is unloaded — WITHOUT force-loading chunks or ticking machines.
  */
 public final class PortalWorldData extends SavedData {
 
-    private record EntryRecord(UUID owner, Optional<UUID> primary, Optional<UUID> secondary, int colorIndex) {
+    private static final Codec<PlayerPortalRegistry.PortalEndpoint> ENDPOINT_CODEC = RecordCodecBuilder.create(instance -> instance.group(
+        UUIDUtil.CODEC.fieldOf("id").forGetter(PlayerPortalRegistry.PortalEndpoint::portalId),
+        Codec.DOUBLE.fieldOf("x").forGetter(PlayerPortalRegistry.PortalEndpoint::x),
+        Codec.DOUBLE.fieldOf("y").forGetter(PlayerPortalRegistry.PortalEndpoint::y),
+        Codec.DOUBLE.fieldOf("z").forGetter(PlayerPortalRegistry.PortalEndpoint::z),
+        Codec.INT.fieldOf("facing").forGetter(PlayerPortalRegistry.PortalEndpoint::facing3D),
+        Codec.DOUBLE.fieldOf("up_x").forGetter(PlayerPortalRegistry.PortalEndpoint::upX),
+        Codec.DOUBLE.fieldOf("up_y").forGetter(PlayerPortalRegistry.PortalEndpoint::upY),
+        Codec.DOUBLE.fieldOf("up_z").forGetter(PlayerPortalRegistry.PortalEndpoint::upZ),
+        Codec.INT.fieldOf("color").forGetter(PlayerPortalRegistry.PortalEndpoint::colorRgb)
+    ).apply(instance, PlayerPortalRegistry.PortalEndpoint::new));
+
+    private record EntryRecord(
+        UUID owner,
+        int channel,
+        Optional<PlayerPortalRegistry.PortalEndpoint> primary,
+        Optional<PlayerPortalRegistry.PortalEndpoint> secondary,
+        int colorIndex
+    ) {
         static final Codec<EntryRecord> CODEC = RecordCodecBuilder.create(instance -> instance.group(
             UUIDUtil.CODEC.fieldOf("owner").forGetter(EntryRecord::owner),
-            UUIDUtil.CODEC.optionalFieldOf("primary").forGetter(EntryRecord::primary),
-            UUIDUtil.CODEC.optionalFieldOf("secondary").forGetter(EntryRecord::secondary),
+            Codec.INT.optionalFieldOf("channel", 0).forGetter(EntryRecord::channel),
+            ENDPOINT_CODEC.optionalFieldOf("primary_ep").forGetter(EntryRecord::primary),
+            ENDPOINT_CODEC.optionalFieldOf("secondary_ep").forGetter(EntryRecord::secondary),
             Codec.INT.fieldOf("color_index").forGetter(EntryRecord::colorIndex)
         ).apply(instance, EntryRecord::new));
     }
@@ -39,7 +58,7 @@ public final class PortalWorldData extends SavedData {
     ).apply(instance, PortalWorldData::fromSerialized));
 
     public static final SavedDataType<PortalWorldData> TYPE = new SavedDataType<>(
-        Portal1Mod.id("portal_pairs"),
+        Portal1Mod.id("portal_pairs_v2"),
         PortalWorldData::new,
         CODEC,
         DataFixTypes.LEVEL
@@ -51,13 +70,16 @@ public final class PortalWorldData extends SavedData {
 
     private static PortalWorldData fromSerialized(List<EntryRecord> entries, int nextColorIndex) {
         PortalWorldData data = new PortalWorldData();
-        Map<UUID, PlayerPortalRegistry.PortalPair> map = new HashMap<>();
+        Map<PlayerPortalRegistry.PairKey, PlayerPortalRegistry.PortalPair> map = new HashMap<>();
         for (EntryRecord rec : entries) {
-            map.put(rec.owner(), new PlayerPortalRegistry.PortalPair(
-                rec.primary().orElse(null),
-                rec.secondary().orElse(null),
-                rec.colorIndex()
-            ));
+            map.put(
+                new PlayerPortalRegistry.PairKey(rec.owner(), rec.channel()),
+                new PlayerPortalRegistry.PortalPair(
+                    rec.primary().orElse(null),
+                    rec.secondary().orElse(null),
+                    rec.colorIndex()
+                )
+            );
         }
         data.registry.loadFromSnapshot(map, nextColorIndex);
         return data;
@@ -65,12 +87,14 @@ public final class PortalWorldData extends SavedData {
 
     private List<EntryRecord> toEntryList() {
         List<EntryRecord> list = new ArrayList<>();
-        for (Map.Entry<UUID, PlayerPortalRegistry.PortalPair> e : registry.snapshotPairs().entrySet()) {
+        for (Map.Entry<PlayerPortalRegistry.PairKey, PlayerPortalRegistry.PortalPair> e : registry.snapshotPairs().entrySet()) {
+            PlayerPortalRegistry.PairKey key = e.getKey();
             PlayerPortalRegistry.PortalPair pair = e.getValue();
             list.add(new EntryRecord(
-                e.getKey(),
-                Optional.ofNullable(pair.primaryId()),
-                Optional.ofNullable(pair.secondaryId()),
+                key.ownerId(),
+                key.channel(),
+                Optional.ofNullable(pair.primary()),
+                Optional.ofNullable(pair.secondary()),
                 pair.colorIndex()
             ));
         }
@@ -81,14 +105,23 @@ public final class PortalWorldData extends SavedData {
         return level.getDataStorage().computeIfAbsent(TYPE);
     }
 
-    public PortalColorScheme getOrAssignColorScheme(UUID ownerId) {
-        PortalColorScheme scheme = registry.getOrAssignColorScheme(ownerId);
+    public PortalColorScheme getOrAssignColorScheme(UUID ownerId, int channel) {
+        PortalColorScheme scheme = registry.getOrAssignColorScheme(ownerId, channel);
         setDirty();
         return scheme;
     }
 
-    public PlayerPortalRegistry.PlacementResult registerPortal(UUID ownerId, boolean secondary, UUID newPortalId) {
-        PlayerPortalRegistry.PlacementResult result = registry.registerPortal(ownerId, secondary, newPortalId);
+    public PortalColorScheme getOrAssignColorScheme(UUID ownerId) {
+        return getOrAssignColorScheme(ownerId, 0);
+    }
+
+    public PlayerPortalRegistry.PlacementResult registerPortal(
+        UUID ownerId,
+        int channel,
+        boolean secondary,
+        PlayerPortalRegistry.PortalEndpoint endpoint
+    ) {
+        PlayerPortalRegistry.PlacementResult result = registry.registerPortal(ownerId, channel, secondary, endpoint);
         setDirty();
         return result;
     }
@@ -99,11 +132,19 @@ public final class PortalWorldData extends SavedData {
         return partner;
     }
 
+    public Optional<PlayerPortalRegistry.PortalEndpoint> getPartnerEndpoint(UUID portalId) {
+        return registry.getPartnerEndpoint(portalId);
+    }
+
     public Optional<UUID> getPartnerPortal(UUID portalId) {
         return registry.getPartnerPortal(portalId);
     }
 
+    public Optional<PlayerPortalRegistry.PortalPair> getPair(UUID ownerId, int channel) {
+        return registry.getPair(ownerId, channel);
+    }
+
     public Optional<PlayerPortalRegistry.PortalPair> getPair(UUID ownerId) {
-        return registry.getPair(ownerId);
+        return getPair(ownerId, 0);
     }
 }

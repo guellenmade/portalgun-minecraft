@@ -133,4 +133,44 @@ final class PortalCoreTests {
         assertEquals(b2, registry.getPartnerPortal(b1).orElseThrow(), "Player B's portals must remain untouched");
         assertEquals(b1, registry.getPartnerPortal(b2).orElseThrow());
     }
+
+    @Test
+    void fourPortalGuns_createFourIndependentColorCodedPairsWithPersistentEndpoints() {
+        PlayerPortalRegistry registry = new PlayerPortalRegistry();
+        UUID player = UUID.randomUUID();
+        PortalBasis north = PortalBasis.fromFaceAndShooterYaw(Direction.NORTH, 180f);
+
+        UUID[] primaries = new UUID[4];
+        UUID[] secondaries = new UUID[4];
+        PortalColorScheme[] schemes = new PortalColorScheme[4];
+
+        for (int ch = 0; ch < 4; ch++) {
+            primaries[ch] = UUID.randomUUID();
+            secondaries[ch] = UUID.randomUUID();
+            schemes[ch] = registry.getOrAssignColorScheme(player, ch);
+
+            var ep1 = PlayerPortalRegistry.PortalEndpoint.of(primaries[ch], new Vec3(ch * 100.0, 64.0, 0.0), north, schemes[ch].primaryRgb());
+            var ep2 = PlayerPortalRegistry.PortalEndpoint.of(secondaries[ch], new Vec3(ch * 100.0, 64.0, 5000.0), north, schemes[ch].secondaryRgb());
+
+            var r1 = registry.registerPortal(player, ch, false, ep1);
+            var r2 = registry.registerPortal(player, ch, true, ep2);
+            assertNull(r1.replacedPortalId());
+            assertEquals(primaries[ch], r2.partnerPortalId());
+        }
+
+        // All 4 gun channels must have distinct color schemes
+        for (int i = 0; i < 4; i++) {
+            for (int j = i + 1; j < 4; j++) {
+                assertNotEquals(schemes[i], schemes[j], "Channel " + i + " and " + j + " must have distinct colors");
+            }
+        }
+
+        // All 4 pairs coexist and preserve distant (5000-block) partner endpoint metadata without chunk loading
+        for (int ch = 0; ch < 4; ch++) {
+            var partnerOfPrimary = registry.getPartnerEndpoint(primaries[ch]).orElseThrow();
+            assertEquals(secondaries[ch], partnerOfPrimary.portalId());
+            assertEquals(5000.0, partnerOfPrimary.z(), EPS);
+            assertEquals(primaries[ch], registry.getPartnerEndpoint(secondaries[ch]).orElseThrow().portalId());
+        }
+    }
 }

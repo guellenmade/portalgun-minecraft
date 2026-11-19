@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "IDI",
+    "ENE",
+    "CIC"
+  ],
+  "key": {
+    "I": "minecraft:iron_ingot",
+    "D": "minecraft:redstone_block",
+    "E": "minecraft:ender_eye",
+    "N": "minecraft:nether_star",
+    "C": "minecraft:red_concrete"
+  },
+  "result": {
+    "id": "portal1:portal_gun_crimson",
+    "count": 1
+  }
+}

@@ -22,35 +22,54 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Aperture Science Handheld Portal Device (Portal 1).
+ * Aperture Science Handheld Portal Device (4 color-coded pair channels: 0..3).
  *
- * - Left-Click: Fires Primary Portal projectile (blue in singleplayer / player's primary color).
- * - Right-Click: Fires Secondary Portal projectile (orange in singleplayer / player's secondary color).
- * - Visible traveling projectile that opens a portal upon hitting a portalable surface.
- * - Cannot fire while carrying a Weighted Storage Cube (matches Portal 1 behavior: firing drops or is blocked;
- *   in Portal 1 firing drops the carried object if you try, or wait: in Portal 1 left/right click while holding
- *   a cube drops it or fires — actually in Portal 1 you can still drop with E or fire to drop? Let's allow
- *   normal firing, or drop if carrying; wait: in Portal 1 pressing attack while holding an object drops it,
- *   while we keep carry strictly on the Use key so firing works cleanly!).
+ * - Channel 0: Classic Blue / Orange
+ * - Channel 1: Emerald / Magenta
+ * - Channel 2: Gold / Violet
+ * - Channel 3: Cyan / Crimson
+ *
+ * Each gun creates its own independent portal pair without affecting the other 3 guns or other players.
  */
 public final class PortalGunItem extends Item {
 
     public static final long FIRE_COOLDOWN_TICKS = 8L;
     private static final Map<UUID, Long> LAST_FIRE_TICK = new HashMap<>();
 
+    private final int channel;
+
     public PortalGunItem(Properties properties) {
+        this(properties, 0);
+    }
+
+    public PortalGunItem(Properties properties, int channel) {
         super(properties);
+        this.channel = channel;
+    }
+
+    public int getChannel() {
+        return this.channel;
     }
 
     @Override
     public InteractionResult use(Level level, Player player, InteractionHand hand) {
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
-            firePortal(serverPlayer, true);
+            firePortal(serverPlayer, this.channel, true);
         }
         return InteractionResult.SUCCESS;
     }
 
     public static boolean firePortal(ServerPlayer player, boolean secondary) {
+        int ch = 0;
+        if (player.getMainHandItem().getItem() instanceof PortalGunItem gun) {
+            ch = gun.getChannel();
+        } else if (player.getOffhandItem().getItem() instanceof PortalGunItem gun) {
+            ch = gun.getChannel();
+        }
+        return firePortal(player, ch, secondary);
+    }
+
+    public static boolean firePortal(ServerPlayer player, int channel, boolean secondary) {
         ServerLevel level = player.level();
         long now = level.getGameTime();
         Long last = LAST_FIRE_TICK.get(player.getUUID());
@@ -59,12 +78,11 @@ public final class PortalGunItem extends Item {
         }
         LAST_FIRE_TICK.put(player.getUUID(), now);
 
-        // If player is carrying a cube, gently drop it when firing (matches Portal 1)
         if (CarryManager.isCarrying(player.getUUID())) {
             CarryManager.dropCarried(player);
         }
 
-        PortalColorScheme scheme = PortalWorldData.get(level).getOrAssignColorScheme(player.getUUID());
+        PortalColorScheme scheme = PortalWorldData.get(level).getOrAssignColorScheme(player.getUUID(), channel);
         int colorRgb = scheme.colorFor(secondary);
 
         Vec3 eyePos = player.getEyePosition();
@@ -74,6 +92,7 @@ public final class PortalGunItem extends Item {
         PortalProjectileEntity projectile = PortalProjectileEntity.create(
             level,
             player.getUUID(),
+            channel,
             muzzlePos,
             look,
             player.getYRot(),

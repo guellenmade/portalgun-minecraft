@@ -1,5 +1,6 @@
 package com.portal1.entity;
 
+import com.portal1.core.PlayerPortalRegistry;
 import com.portal1.core.PortalBasis;
 import com.portal1.core.PortalColorScheme;
 import com.portal1.core.PortalSurfaceRules;
@@ -194,24 +195,35 @@ public final class PortalEntity extends Entity {
         return 1.0f - (1.0f - t) * (1.0f - t);
     }
 
-    public void syncLinkWith(PortalEntity partner) {
-        if (partner == null || !partner.isAlive()) {
+    public void syncLinkWithEndpoint(PlayerPortalRegistry.PortalEndpoint partnerEndpoint, int partnerEntityId) {
+        if (partnerEndpoint == null) {
             this.linkedPortalUuid = null;
             this.entityData.set(DATA_LINKED, false);
             this.entityData.set(DATA_LINKED_ENTITY_ID, -1);
             return;
         }
-        PortalBasis pb = partner.getPortalBasis();
-        this.linkedPortalUuid = partner.getUUID();
+        PortalBasis pb = partnerEndpoint.basis();
+        this.linkedPortalUuid = partnerEndpoint.portalId();
         this.entityData.set(DATA_LINKED, true);
-        this.entityData.set(DATA_LINKED_X, (float) partner.getX());
-        this.entityData.set(DATA_LINKED_Y, (float) partner.getY());
-        this.entityData.set(DATA_LINKED_Z, (float) partner.getZ());
+        this.entityData.set(DATA_LINKED_X, (float) partnerEndpoint.x());
+        this.entityData.set(DATA_LINKED_Y, (float) partnerEndpoint.y());
+        this.entityData.set(DATA_LINKED_Z, (float) partnerEndpoint.z());
         this.entityData.set(DATA_LINKED_FACING, pb.facing().get3DDataValue());
         this.entityData.set(DATA_LINKED_UP_X, (float) pb.up().x);
         this.entityData.set(DATA_LINKED_UP_Y, (float) pb.up().y);
         this.entityData.set(DATA_LINKED_UP_Z, (float) pb.up().z);
-        this.entityData.set(DATA_LINKED_ENTITY_ID, partner.getId());
+        this.entityData.set(DATA_LINKED_ENTITY_ID, partnerEntityId);
+    }
+
+    public void syncLinkWith(PortalEntity partner) {
+        if (partner == null || !partner.isAlive()) {
+            syncLinkWithEndpoint(null, -1);
+            return;
+        }
+        syncLinkWithEndpoint(
+            PlayerPortalRegistry.PortalEndpoint.of(partner.getUUID(), partner.position(), partner.getPortalBasis(), partner.getColorRgb()),
+            partner.getId()
+        );
     }
 
     @Override
@@ -221,21 +233,36 @@ public final class PortalEntity extends Entity {
             return;
         }
 
+        PortalWorldData worldData = PortalWorldData.get(serverLevel);
+
+        // 0. If this portal was replaced while its chunk was unloaded, cleanly remove the stale portal
+        if (this.tickCount % 10 == 0 && worldData.getPair(this.ownerUuid, 0).isPresent()
+            && worldData.getPartnerEndpoint(this.getUUID()).isEmpty()
+            && !isRegisteredInWorldData(worldData)) {
+            this.discard();
+            return;
+        }
+
         // 1. Validate backing surface every 5 ticks (matches Portal 1 "Surface removed from behind portal.")
         if (this.tickCount % 5 == 0 && !isBackingSurfaceIntact(serverLevel)) {
             fizzleAndClose(serverLevel);
             return;
         }
 
-        // 2. Resolve partner portal from persistent PortalWorldData
-        PortalEntity partner = resolvePartner(serverLevel);
-        if (partner == null) {
+        // 2. Resolve partner endpoint from persistent PortalWorldData — works even when the partner's
+        //    chunk is unloaded, WITHOUT force-loading chunks or ticking distant machines!
+        Optional<PlayerPortalRegistry.PortalEndpoint> partnerOpt = worldData.getPartnerEndpoint(this.getUUID());
+        if (partnerOpt.isEmpty()) {
             if (this.isLinked()) {
-                syncLinkWith(null);
+                syncLinkWithEndpoint(null, -1);
             }
             return;
         }
-        syncLinkWith(partner);
+
+        PlayerPortalRegistry.PortalEndpoint partnerEndpoint = partnerOpt.get();
+        Entity loadedPartner = serverLevel.getEntity(partnerEndpoint.portalId());
+        int partnerEntityId = (loadedPartner instanceof PortalEntity p && p.isAlive()) ? p.getId() : -1;
+        syncLinkWithEndpoint(partnerEndpoint, partnerEntityId);
 
         // 3. Process funneling and teleportation for all nearby entities (including other players!)
         PortalBasis entryBasis = getPortalBasis();
@@ -261,9 +288,25 @@ public final class PortalEntity extends Entity {
                 applyFloorFunneling(entity, entryBasis);
             }
             if (shouldTeleport(entity, entryBasis)) {
-                teleportEntity(serverLevel, entity, entryBasis, partner, now);
+                teleportEntity(serverLevel, entity, entryBasis, partnerEndpoint, now);
             }
         }
+    }
+
+    private boolean isRegisteredInWorldData(PortalWorldData data) {
+        if (this.ownerUuid == null) {
+            return true;
+        }
+        for (int ch = 0; ch < PlayerPortalRegistry.MAX_CHANNELS; ch++) {
+            var pairOpt = data.getPair(this.ownerUuid, ch);
+            if (pairOpt.isPresent()) {
+                var pair = pairOpt.get();
+                if (this.getUUID().equals(pair.primaryId()) || this.getUUID().equals(pair.secondaryId())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private boolean isBackingSurfaceIntact(ServerLevel level) {
@@ -417,10 +460,11 @@ public final class PortalEntity extends Entity {
         ServerLevel level,
         Entity entity,
         PortalBasis entryBasis,
-        PortalEntity exitPortal,
+        PlayerPortalRegistry.PortalEndpoint exitEndpoint,
         long now
     ) {
-        PortalBasis exitBasis = exitPortal.getPortalBasis();
+        PortalBasis exitBasis = exitEndpoint.basis();
+        Vec3 exitPos = exitEndpoint.position();
         Vec3 inVel = entity.getDeltaMovement();
 
         // If Minecraft's block collision just zeroed the entity's velocity on the exact impact frame
@@ -453,7 +497,7 @@ public final class PortalEntity extends Entity {
             ? entity.position()
             : entity.position().add(0.0, entity.getBbHeight() * 0.5, 0.0);
         Vec3 targetCenter = PortalTransform.transformPosition(
-            sampleIn, this.position(), entryBasis, exitPortal.position(), exitBasis, exitOffset
+            sampleIn, this.position(), entryBasis, exitPos, exitBasis, exitOffset
         );
         Vec3 targetFeetPos = exitBasis.isWall()
             ? targetCenter.subtract(0.0, entity.getBbHeight() * 0.5, 0.0)
@@ -470,7 +514,8 @@ public final class PortalEntity extends Entity {
         TELEPORT_COOLDOWN_UNTIL.put(entity.getUUID(), now + COOLDOWN_TICKS);
         LAST_SAMPLE_POS.remove(entity.getUUID());
 
-        // 5. Perform teleportation + velocity application
+        // 5. Perform teleportation + velocity application (loads ONLY destination chunk on demand,
+        //    never permanently force-loading chunks or ticking distant machines)
         entity.resetFallDistance();
         if (entity instanceof ServerPlayer player) {
             player.teleportTo(
@@ -494,6 +539,8 @@ public final class PortalEntity extends Entity {
                 carried.resetFallDistance();
             }
         } else {
+            // Ensure destination chunk is briefly accessible for non-player entity placement
+            level.getChunk(BlockPos.containing(targetFeetPos));
             entity.teleportTo(targetFeetPos.x, targetFeetPos.y, targetFeetPos.z);
             entity.setYRot(newLook.yaw());
             entity.setXRot(newLook.pitch());
@@ -502,10 +549,11 @@ public final class PortalEntity extends Entity {
         }
 
         // 6. Audio & visual cues on entry and exit
+        BlockPos exitBlockPos = BlockPos.containing(exitPos);
         level.playSound(null, this.blockPosition(), SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 0.45f, 1.35f);
-        level.playSound(null, exitPortal.blockPosition(), SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 0.45f, 1.15f);
+        level.playSound(null, exitBlockPos, SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 0.45f, 1.15f);
         spawnPortalBurst(level, this.position(), this.getColorRgb());
-        spawnPortalBurst(level, exitPortal.position(), exitPortal.getColorRgb());
+        spawnPortalBurst(level, exitPos, exitEndpoint.colorRgb());
     }
 
     private static void spawnPortalBurst(ServerLevel level, Vec3 pos, int colorRgb) {

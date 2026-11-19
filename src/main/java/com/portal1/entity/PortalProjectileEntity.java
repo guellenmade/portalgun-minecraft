@@ -49,6 +49,7 @@ public final class PortalProjectileEntity extends Entity {
 
     private UUID ownerUuid;
     private float shooterYaw;
+    private int channel;
 
     public PortalProjectileEntity(EntityType<? extends PortalProjectileEntity> type, Level level) {
         super(type, level);
@@ -64,8 +65,22 @@ public final class PortalProjectileEntity extends Entity {
         boolean secondary,
         int colorRgb
     ) {
+        return create(level, ownerUuid, 0, startPos, direction, shooterYaw, secondary, colorRgb);
+    }
+
+    public static PortalProjectileEntity create(
+        ServerLevel level,
+        UUID ownerUuid,
+        int channel,
+        Vec3 startPos,
+        Vec3 direction,
+        float shooterYaw,
+        boolean secondary,
+        int colorRgb
+    ) {
         PortalProjectileEntity proj = new PortalProjectileEntity(ModEntities.PORTAL_PROJECTILE.get(), level);
         proj.ownerUuid = ownerUuid;
+        proj.channel = channel;
         proj.shooterYaw = shooterYaw;
         proj.setPos(startPos);
         proj.setDeltaMovement(direction.normalize().scale(SHOT_SPEED));
@@ -138,7 +153,7 @@ public final class PortalProjectileEntity extends Entity {
 
         UUID existingSameSlotId = null;
         if (this.ownerUuid != null) {
-            Optional<PlayerPortalRegistry.PortalPair> pairOpt = worldData.getPair(this.ownerUuid);
+            Optional<PlayerPortalRegistry.PortalPair> pairOpt = worldData.getPair(this.ownerUuid, this.channel);
             if (pairOpt.isPresent()) {
                 existingSameSlotId = isSecondary() ? pairOpt.get().secondaryId() : pairOpt.get().primaryId();
             }
@@ -165,15 +180,18 @@ public final class PortalProjectileEntity extends Entity {
             return;
         }
 
-        // Open new portal and register under owner's pair
+        // Open new portal and register lightweight endpoint under owner's (owner, channel) pair
         PortalEntity newPortal = PortalEntity.create(
             level, validPos.get(), basis, this.ownerUuid, isSecondary(), getColorRgb()
         );
+        PlayerPortalRegistry.PortalEndpoint newEndpoint = PlayerPortalRegistry.PortalEndpoint.of(
+            newPortal.getUUID(), validPos.get(), basis, getColorRgb()
+        );
         PlayerPortalRegistry.PlacementResult reg = worldData.registerPortal(
-            this.ownerUuid, isSecondary(), newPortal.getUUID()
+            this.ownerUuid, this.channel, isSecondary(), newEndpoint
         );
 
-        // Close ONLY the owner's previous portal of the same slot (NEVER another player's portal)
+        // Close ONLY the owner's previous portal of the same channel & slot (NEVER another channel or player)
         if (reg.replacedPortalId() != null) {
             Entity old = level.getEntity(reg.replacedPortalId());
             if (old instanceof PortalEntity oldPortal && oldPortal.isAlive()) {
@@ -183,12 +201,14 @@ public final class PortalProjectileEntity extends Entity {
 
         level.addFreshEntity(newPortal);
 
-        // Link both portals if owner's partner portal is active
-        if (reg.partnerPortalId() != null) {
+        // Link both portals (works even if partner is in an unloaded chunk!)
+        if (reg.partnerEndpoint() != null) {
             Entity partnerEnt = level.getEntity(reg.partnerPortalId());
             if (partnerEnt instanceof PortalEntity partner && partner.isAlive()) {
                 newPortal.syncLinkWith(partner);
                 partner.syncLinkWith(newPortal);
+            } else {
+                newPortal.syncLinkWithEndpoint(reg.partnerEndpoint(), -1);
             }
         }
 
@@ -230,6 +250,7 @@ public final class PortalProjectileEntity extends Entity {
             } catch (IllegalArgumentException ignored) {}
         });
         this.shooterYaw = input.getFloatOr("ShooterYaw", 0.0f);
+        this.channel = input.getIntOr("Channel", 0);
         this.entityData.set(DATA_IS_SECONDARY, input.getBooleanOr("IsSecondary", false));
         this.entityData.set(DATA_COLOR_RGB, input.getIntOr("ColorRgb", PortalColorScheme.CLASSIC.primaryRgb()));
     }
@@ -240,6 +261,7 @@ public final class PortalProjectileEntity extends Entity {
             output.putString("OwnerUuid", this.ownerUuid.toString());
         }
         output.putFloat("ShooterYaw", this.shooterYaw);
+        output.putInt("Channel", this.channel);
         output.putBoolean("IsSecondary", isSecondary());
         output.putInt("ColorRgb", getColorRgb());
     }

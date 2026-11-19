@@ -1,5 +1,8 @@
 {
-  "item.portal1.portal_gun": "Aperture Science Handheld Portal Device",
+  "item.portal1.portal_gun": "Portal Gun (Blue / Orange)",
+  "item.portal1.portal_gun_emerald": "Portal Gun (Emerald / Magenta)",
+  "item.portal1.portal_gun_gold": "Portal Gun (Gold / Violet)",
+  "item.portal1.portal_gun_crimson": "Portal Gun (Cyan / Crimson)",
   "item.portal1.weighted_cube": "Weighted Storage Cube",
   "entity.portal1.portal": "Portal",
   "entity.portal1.portal_projectile": "Portal Projectile",
