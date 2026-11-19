@@ -1,0 +1,9 @@
+{
+  "item.portal1.portal_gun": "Aperture Science Handheld Portal Device",
+  "item.portal1.weighted_cube": "Weighted Storage Cube",
+  "entity.portal1.portal": "Portal",
+  "entity.portal1.portal_projectile": "Portal Projectile",
+  "entity.portal1.weighted_cube": "Weighted Storage Cube",
+  "key.category.portal1.controls": "Portal 1",
+  "key.portal1.use_object": "Use / Carry Object"
+}

@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "ICI",
+    "CRC",
+    "ICI"
+  ],
+  "key": {
+    "I": "minecraft:iron_ingot",
+    "C": "minecraft:light_gray_concrete",
+    "R": "minecraft:redstone"
+  },
+  "result": {
+    "id": "portal1:weighted_cube",
+    "count": 1
+  }
+}
