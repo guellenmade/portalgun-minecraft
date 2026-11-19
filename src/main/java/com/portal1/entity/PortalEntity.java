@@ -270,7 +270,7 @@ public final class PortalEntity extends Entity {
         PortalBasis entryBasis = getPortalBasis();
         AABB scanBox = new AABB(this.position(), this.position()).inflate(
             entryBasis.isFloor() ? 1.5 : 1.35,
-            entryBasis.isFloor() ? PortalBasis.FUNNEL_HEIGHT : 1.5,
+            entryBasis.isFloor() ? 4.5 : 1.5,
             entryBasis.isFloor() ? 1.5 : 1.35
         );
         List<Entity> candidates = serverLevel.getEntities(this, scanBox, this::canTeleportEntity);
@@ -297,6 +297,9 @@ public final class PortalEntity extends Entity {
     }
 
     private static Vec3 computeTrueVelocity(Entity entity, long now) {
+        if (entity instanceof ServerPlayer player) {
+            return com.portal1.world.PlayerVelocityTracker.getVelocity(player);
+        }
         Vec3 curPos = entity.position();
         Vec3 prevPos = LAST_ENTITY_POS.put(entity.getUUID(), curPos);
         Long prevTick = LAST_ENTITY_POS_TICK.put(entity.getUUID(), now);
@@ -304,14 +307,8 @@ public final class PortalEntity extends Entity {
 
         if (prevPos != null && prevTick != null && now > prevTick && (now - prevTick) <= 3L) {
             Vec3 posDelta = curPos.subtract(prevPos).scale(1.0 / (now - prevTick));
-            // Ignore huge jumps (teleports)
-            if (posDelta.lengthSqr() < 25.0) {
-                if (entity instanceof ServerPlayer) {
-                    return posDelta;
-                }
-                if (posDelta.lengthSqr() > deltaVel.lengthSqr()) {
-                    return posDelta;
-                }
+            if (posDelta.lengthSqr() < 25.0 && posDelta.lengthSqr() > deltaVel.lengthSqr()) {
+                return posDelta;
             }
         }
         return deltaVel;
@@ -546,8 +543,9 @@ public final class PortalEntity extends Entity {
             entity.getYRot(), entity.getXRot(), entryBasis, exitBasis
         );
 
-        // 4. Mark cooldown and clear stale plane-crossing/velocity history before teleporting
-        TELEPORT_COOLDOWN_UNTIL.put(entity.getUUID(), now + COOLDOWN_TICKS);
+        // 4. Mark adaptive cooldown (shorter at high speed so tight infinite fall loops never stall)
+        long cooldown = finalVel.lengthSqr() > 0.49 ? 3L : COOLDOWN_TICKS;
+        TELEPORT_COOLDOWN_UNTIL.put(entity.getUUID(), now + cooldown);
         LAST_SAMPLE_POS.remove(entity.getUUID());
         LAST_ENTITY_POS.remove(entity.getUUID());
         LAST_ENTITY_POS_TICK.remove(entity.getUUID());
@@ -556,6 +554,7 @@ public final class PortalEntity extends Entity {
         //    never permanently force-loading chunks or ticking distant machines)
         entity.resetFallDistance();
         if (entity instanceof ServerPlayer player) {
+            com.portal1.world.PlayerVelocityTracker.onTeleport(player, targetFeetPos, finalVel, now);
             player.teleportTo(
                 level,
                 targetFeetPos.x, targetFeetPos.y, targetFeetPos.z,

@@ -28,10 +28,14 @@ public final class Portal1Mod {
         modEventBus.addListener(ModItems::addCreativeTabs);
         modEventBus.addListener(PortalNetworking::registerPayloads);
 
-        NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post event) -> CarryManager.tickServer(event.getServer()));
-        NeoForge.EVENT_BUS.addListener((PlayerEvent.PlayerLoggedOutEvent event) ->
-            CarryManager.onPlayerDisconnect(event.getEntity().getUUID())
-        );
+        NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post event) -> {
+            com.portal1.world.PlayerVelocityTracker.tickServer(event.getServer());
+            CarryManager.tickServer(event.getServer());
+        });
+        NeoForge.EVENT_BUS.addListener((PlayerEvent.PlayerLoggedOutEvent event) -> {
+            CarryManager.onPlayerDisconnect(event.getEntity().getUUID());
+            com.portal1.world.PlayerVelocityTracker.onDisconnect(event.getEntity().getUUID());
+        });
 
         LOGGER.info("Portal 1 Gun mod (NeoForge) initialized for Minecraft 26.2");
     }
