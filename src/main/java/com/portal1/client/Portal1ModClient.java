@@ -1,16 +1,23 @@
 package com.portal1.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.vertex.PoseStack;
 import com.portal1.Portal1Mod;
 import com.portal1.client.render.PortalEntityRenderer;
+import com.portal1.client.render.PortalGunAnimator;
 import com.portal1.client.render.PortalProjectileRenderer;
 import com.portal1.client.render.PortalViewManager;
 import com.portal1.client.render.WeightedCubeRenderer;
 import com.portal1.entity.ModEntities;
+import com.portal1.item.ModItems;
 import com.portal1.item.PortalGunItem;
 import com.portal1.world.PortalNetworking;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
@@ -19,6 +26,8 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
+import net.neoforged.neoforge.client.extensions.common.IClientItemExtensions;
+import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsEvent;
 import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 import net.neoforged.neoforge.common.NeoForge;
 import org.lwjgl.glfw.GLFW;
@@ -30,10 +39,10 @@ public final class Portal1ModClient {
         KeyMapping.Category.register(Portal1Mod.id("controls"));
 
     private static KeyMapping useObjectKey;
-    private static net.minecraft.world.phys.Vec3 pendingExitVelocity = null;
+    private static Vec3 pendingExitVelocity = null;
     private static int pendingExitVelocityTicks = 0;
 
-    public static void setPendingExitVelocity(net.minecraft.world.phys.Vec3 vel) {
+    public static void setPendingExitVelocity(Vec3 vel) {
         pendingExitVelocity = vel;
         pendingExitVelocityTicks = 2;
     }
@@ -41,6 +50,7 @@ public final class Portal1ModClient {
     public Portal1ModClient(IEventBus modEventBus) {
         modEventBus.addListener(this::registerEntityRenderers);
         modEventBus.addListener(this::registerKeyMappings);
+        modEventBus.addListener(this::registerClientExtensions);
 
         NeoForge.EVENT_BUS.addListener(this::onInteractionKey);
         NeoForge.EVENT_BUS.addListener(this::onClientTick);
@@ -63,15 +73,50 @@ public final class Portal1ModClient {
         event.register(useObjectKey);
     }
 
+    private void registerClientExtensions(RegisterClientExtensionsEvent event) {
+        IClientItemExtensions portalGunExt = new IClientItemExtensions() {
+            @Override
+            public boolean applyForgeHandTransform(
+                PoseStack poseStack,
+                LocalPlayer player,
+                HumanoidArm arm,
+                ItemStack itemInHand,
+                float partialTick,
+                float equipProcess,
+                float swingProcess
+            ) {
+                int side = arm == HumanoidArm.RIGHT ? 1 : -1;
+                poseStack.translate(side * 0.56f, -0.52f + equipProcess * -0.6f, -0.72f);
+                PortalGunAnimator.applyFirstPersonTransform(poseStack);
+                return true;
+            }
+        };
+
+        event.registerItem(
+            portalGunExt,
+            ModItems.PORTAL_GUN.get(),
+            ModItems.PORTAL_GUN_EMERALD.get(),
+            ModItems.PORTAL_GUN_GOLD.get(),
+            ModItems.PORTAL_GUN_CRIMSON.get()
+        );
+    }
+
     private void onInteractionKey(InputEvent.InteractionKeyMappingTriggered event) {
-        if (!event.isAttack()) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
             return;
         }
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player != null && mc.player.getMainHandItem().getItem() instanceof PortalGunItem) {
+        boolean holdingGun = mc.player.getMainHandItem().getItem() instanceof PortalGunItem;
+        if (!holdingGun) {
+            return;
+        }
+        if (event.isAttack()) {
             event.setCanceled(true);
             event.setSwingHand(false);
+            PortalGunAnimator.triggerFire(false);
             ClientPacketDistributor.sendToServer(new PortalNetworking.FirePortalPayload(false));
+        } else if (event.isUseItem()) {
+            PortalGunAnimator.triggerFire(true);
         }
     }
 
